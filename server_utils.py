@@ -152,7 +152,4 @@ async def chat_with_sydney(
                             yield _suggestion_event(suggested_responses)
                             break
         except Exception as e:
-            yield ServerSentEvent(
-                event="error",
-                data=e
-            )
+            yield _err_event(e)
