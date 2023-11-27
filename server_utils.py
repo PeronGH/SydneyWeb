@@ -1,8 +1,11 @@
 # We don't want to modify `sydney.py`, so that we can keep it easy to sync with upstream.
 # But to make the API easier to use, we have the wrapper around `sydney.py`.
 
+import json
+import uuid
+import urllib.parse
 from pydantic import BaseModel
-from typing import Literal
+from typing import Literal, Any
 from fastapi import UploadFile
 from base64 import b64encode
 from contextlib import aclosing
@@ -19,11 +22,11 @@ class Cookie(BaseModel):
 
 class Message(BaseModel):
     role: Literal['user', 'assistant', 'system']
-    type: str
+    subtype: str
     content: str
 
     def __str__(self):
-        return f'[{self.role}](#{self.type})\n{self.content}'
+        return f'[{self.role}](#{self.subtype})\n{self.content}'
 
 
 class ChatWithSydneyParams(BaseModel):
@@ -37,6 +40,19 @@ class ChatWithSydneyParams(BaseModel):
 
 def _format_messages(messages: list[Message]):
     return "\n\n".join(str(msg) for msg in messages)
+
+
+def _msg_event(role: Literal['user', 'assistant', 'system'], subtype: str, content: str):
+    msg = Message(role=role, subtype=subtype, content=content)
+    return ServerSentEvent(event="message", data=msg.model_dump_json())
+
+
+def _suggestion_event(items: list[str]):
+    return ServerSentEvent(event='suggestion', data=json.dumps(items))
+
+
+def _err_event(e: Any):
+    return ServerSentEvent(event='error', data=e)
 
 
 async def chat_with_sydney(
@@ -80,11 +96,61 @@ async def chat_with_sydney(
             no_search=params.no_search
     )) as agen:
         try:
-            async for msg in agen:
-                yield ServerSentEvent(
-                    event="message",
-                    data=msg
-                )
+            async for response in agen:
+                if response["type"] == 1 and "messages" in response["arguments"][0]:
+                    message = response["arguments"][0]["messages"][0]
+                    msg_type = message.get("messageType")
+                    if msg_type == "InternalSearchQuery":
+                        yield _msg_event('assistant', 'search_query', message['hiddenText'])
+                    elif msg_type == "InternalSearchResult":
+                        try:
+                            links = []
+                            if 'Web search returned no relevant result' in message['hiddenText']:
+                                yield _msg_event('assistant', 'search_results', message['hiddenText'])
+                            else:
+                                for group in json.loads(message['text']).values():
+                                    sr_index = 1
+                                    for sub_group in group:
+                                        links.append(
+                                            f'[^{sr_index}^][{sub_group["title"]}]({sub_group["url"]})')
+                                        sr_index += 1
+                                yield _msg_event('assistant', 'search_results', '\n\n'.join(links))
+                        except Exception as err:
+                            yield _err_event('Error when parsing InternalSearchResult: ' + str(err))
+                    elif msg_type == "InternalLoaderMessage":
+                        if 'hiddenText' in message:
+                            yield _msg_event('assistant', 'loading', message['hiddenText'])
+                        elif 'text' in message:
+                            yield _msg_event('assistant', 'loading', message['text'])
+                        else:
+                            yield _msg_event('assistant', 'loading', json.dumps(message))
+                    elif msg_type == "GenerateContentQuery":
+                        if message['contentType'] == 'IMAGE':
+                            yield _msg_event('assistant', 'generative_image',
+                                             f"Keyword: {message['text']}\n"
+                                             f"Link: <https://www.bing.com/images/create?q="
+                                             f"{urllib.parse.quote(message['text'])}&rt=4&FORM=GENCRE&id={uuid.uuid4().hex}>")
+                    elif msg_type is None:
+                        if "cursor" in response["arguments"][0]:
+                            yield _msg_event('assistant', 'message', '')
+                        if message.get("contentOrigin") == "Apology":
+                            yield _err_event("Looks like the user message has triggered the Bing filter")
+                        else:
+                            yield _msg_event('assistant', 'message', message["text"])
+                            if "suggestedResponses" in message:
+                                suggested_responses = list(
+                                    map(lambda x: x["text"], message["suggestedResponses"]))
+                                yield _suggestion_event(suggested_responses)
+                                break
+                    else:
+                        yield _err_event(f'Unsupported message type: {msg_type}')
+                    if response["type"] == 2 and "item" in response and "messages" in response["item"]:
+                        message = response["item"]["messages"][-1]
+                        if "suggestedResponses" in message:
+                            suggested_responses = list(
+                                map(lambda x: x["text"], message["suggestedResponses"]))
+                            yield _suggestion_event(suggested_responses)
+                            break
         except Exception as e:
             yield ServerSentEvent(
                 event="error",
