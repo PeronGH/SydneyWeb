@@ -1,10 +1,10 @@
 package sydney
 
 import (
-	"github.com/google/uuid"
 	"log/slog"
-	"strconv"
 	"sydneyqt/util"
+
+	"github.com/google/uuid"
 )
 
 type Sydney struct {
@@ -49,7 +49,7 @@ func NewSydney(debug bool, cookies map[string]string, proxy string,
 	if err != nil {
 		panic(err)
 	}
-	forwardedIP := "1.0.0." + strconv.Itoa(util.RandIntInclusive(1, 255))
+
 	return &Sydney{
 		debug:             debug,
 		cookies:           cookies,
@@ -160,7 +160,6 @@ func NewSydney(debug bool, cookies map[string]string, proxy string,
 			"user-agent":                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36 Edg/113.0.1774.50",
 			"Referer":                     "https://www.bing.com/search?q=Bing+AI&showconv=1",
 			"Referrer-Policy":             "origin-when-cross-origin",
-			"x-forwarded-for":             forwardedIP,
 			"Cookie":                      util.FormatCookieString(cookies),
 		},
 		headersCreateConversation: map[string]string{
@@ -180,7 +179,6 @@ func NewSydney(debug bool, cookies map[string]string, proxy string,
 			"upgrade-insecure-requests":   "1",
 			"user-agent":                  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36 Edg/112.0.1722.46",
 			"x-edge-shopping-flag":        "1",
-			"x-forwarded-for":             forwardedIP,
 			"Cookie":                      util.FormatCookieString(cookies),
 		},
 		headersCreateImage: map[string]string{
@@ -191,7 +189,6 @@ func NewSydney(debug bool, cookies map[string]string, proxy string,
 			"referer":                   "https://www.bing.com/search?q=Bing+AI&showconv=1",
 			"upgrade-insecure-requests": "1",
 			"user-agent":                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36 Edg/112.0.1722.46",
-			"x-forwarded-for":           forwardedIP,
 			"Sec-Fetch-Dest":            "iframe",
 			"Cookie":                    util.FormatCookieString(cookies),
 		},

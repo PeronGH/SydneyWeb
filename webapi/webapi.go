@@ -197,7 +197,7 @@ func main() {
 		conversationStyle := util.Ternary(
 			strings.HasPrefix(request.Model, "gpt-3.5-turbo"), "Balanced", "Creative")
 
-		sydneyAPI := sydney.NewSydney(false, cookies, proxy, conversationStyle, "en-US", "", "", false)
+		sydneyAPI := sydney.NewSydney(false, cookies, proxy, conversationStyle, "en-US", "", "", true)
 
 		// create new conversation if not provided
 		if request.Conversation.ConversationId == "" {
