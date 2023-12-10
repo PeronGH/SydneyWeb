@@ -1,23 +1,27 @@
 <script setup lang="ts">
 import {computed, onMounted, onUnmounted, ref, watch} from "vue"
-import {main} from "../../wailsjs/go/models"
+import {main, sydney} from "../../wailsjs/go/models"
 import {EventsEmit, EventsOff, EventsOn} from "../../wailsjs/runtime"
-import {ChatMessage, generateRandomName, shadeColor, swal, toChatMessages} from "../helper"
-import {AskAI, CountToken, FetchWebpage, UploadDocument, UploadSydneyImage} from "../../wailsjs/go/main/App"
+import {generateRandomName, shadeColor, swal} from "../helper"
+import {AskAI, CountToken, GenerateImage} from "../../wailsjs/go/main/App"
 import {AskTypeOpenAI, AskTypeSydney} from "../constants"
 import Scaffold from "../components/Scaffold.vue"
-import Conversation from "../components/Conversation.vue"
 import {useSettings} from "../composables"
 import {useTheme} from "vuetify"
-import UserInputToolButton from "../components/UserInputToolButton.vue"
 import dayjs from "dayjs"
-import SearchWorkspaceButton from "../components/SearchWorkspaceButton.vue"
-import RichChatContext from "../components/RichChatContext.vue"
-import UserStatusButton from "../components/UserStatusButton.vue"
+import RichChatContext from "../components/index/RichChatContext.vue"
+import UserStatusButton from "../components/index/UserStatusButton.vue"
+import WorkspaceNav from "../components/index/WorkspaceNav.vue"
+import UploadImageButton from "../components/index/UploadImageButton.vue"
+import UploadDocumentButton from "../components/index/UploadDocumentButton.vue"
+import FetchWebpageButton from "../components/index/FetchWebpageButton.vue"
+import RevokeButton from "../components/index/RevokeButton.vue"
 import AskOptions = main.AskOptions
 import Workspace = main.Workspace
 import ChatFinishResult = main.ChatFinishResult
 import UploadSydneyImageResult = main.UploadSydneyImageResult
+import GenerativeImage = sydney.GenerativeImage
+import GenerateImageResult = sydney.GenerateImageResult
 
 let theme = useTheme()
 let navDrawer = ref(true)
@@ -37,13 +41,10 @@ let currentWorkspace = ref(<Workspace>{
   preset: 'Sydney',
   conversation_style: 'Creative',
   no_search: false,
+  image_packs: <GenerateImageResult[]>[],
   created_at: dayjs().format()
 })
-let sortedWorkspaces = computed(() => {
-  return config.value.workspaces?.sort((a, b) => {
-    return b.id - a.id
-  }) ?? []
-})
+
 let chatContextTokenCount = ref(0)
 let userInputTokenCount = ref(0)
 let fetchingTokenCount = ref(0)
@@ -140,6 +141,9 @@ let askEventMap = {
   },
   "chat_conversation_created": () => {
     statusBarText.value = 'Fetching the response...'
+  },
+  "chat_generate_image": (req: GenerativeImage) => {
+    generateImage(req)
   }
 }
 
@@ -166,15 +170,6 @@ function fixContextLineBreak() {
       currentWorkspace.value.context += "\n\n"
     }
   }
-}
-
-function getChatMessages(): ChatMessage[] {
-  let ctx = currentWorkspace.value.context
-  return toChatMessages(ctx)
-}
-
-function setChatMessages(arr: ChatMessage[]) {
-  currentWorkspace.value.context = arr.map(v => `[${v.role}](#${v.type})\n${v.message}`).join('\n\n') + '\n\n'
 }
 
 function doListeningEvents(isUnregister: boolean = false) {
@@ -229,86 +224,11 @@ function applyQuickResponse(text: string) {
   currentWorkspace.value.input += text
 }
 
-function handleRevoke() {
-  let arr = getChatMessages()
-  console.log(arr)
-  let usersArr = arr.filter(v => v.role === 'user' && v.type === 'message')
-  if (usersArr.length < 1) {
-    swal.error('Nothing to revoke')
-    return
-  }
-  currentWorkspace.value.input = usersArr[usersArr.length - 1].message
-  // @ts-ignore
-  setChatMessages(arr.slice(0, arr.findLastIndex(v => v === usersArr[usersArr.length - 1])))
-}
-
 function stopAsking() {
   EventsEmit('chat_stop')
 }
 
 let uploadedImage = ref<UploadSydneyImageResult | undefined>()
-let uploadingImage = ref(false)
-
-function uploadImage() {
-  uploadingImage.value = true
-  UploadSydneyImage().then(res => {
-    if (res.canceled) {
-      return
-    }
-    uploadedImage.value = res
-  }).catch(err => {
-    swal.error(err)
-  }).finally(() => {
-    uploadingImage.value = false
-  })
-}
-
-let uploadingDocument = ref(false)
-
-function uploadDocument() {
-  uploadingDocument.value = true
-  UploadDocument().then(res => {
-    if (res.canceled) {
-      return
-    }
-    fixContextLineBreak()
-    currentWorkspace.value.context += '[user](#document_context_' + res.ext?.substring(1) + '_file)\n' + res.text
-    scrollChatContextToBottom()
-  }).catch(err => {
-    swal.error(err)
-  }).finally(() => {
-    uploadingDocument.value = false
-  })
-}
-
-let webpageFetchDialog = ref(false)
-let webpageFetchURL = ref('')
-let webpageFetching = ref(false)
-let webpageFetchError = ref('')
-
-function fetchWebpage() {
-  webpageFetching.value = true
-  webpageFetchError.value = ''
-  FetchWebpage(webpageFetchURL.value).then(res => {
-    let text = '[user](#webpage_context)\n'
-    if (res.title === '') {
-      text += JSON.stringify(res.content)
-    } else {
-      text += JSON.stringify(res)
-    }
-    text += '\n\n'
-    fixContextLineBreak()
-    currentWorkspace.value.context += text
-    scrollChatContextToBottom()
-    webpageFetching.value = false
-    webpageFetchDialog.value = false
-    webpageFetchURL.value = ''
-  }).catch(err => {
-    webpageFetchError.value = err.toString()
-  }).finally(() => {
-    webpageFetching.value = false
-  })
-}
 
 function handleKeyPress(event: KeyboardEvent) {
   if (document.getElementById('user-input') !== document.activeElement) {
@@ -325,6 +245,12 @@ function handleKeyPress(event: KeyboardEvent) {
   } else if ((event.keyCode == 10 || event.keyCode == 13) && (event.ctrlKey || event.metaKey)) {
     startAsking()
   }
+}
+
+function appendBlockToCurrentWorkspace(blockText: string) {
+  fixContextLineBreak()
+  currentWorkspace.value.context += blockText
+  scrollChatContextToBottom()
 }
 
 onMounted(() => {
@@ -369,64 +295,28 @@ function onReset() {
   suggestedResponses.value = []
 }
 
-function onDeleteWorkspace(workspace: Workspace) {
-  if (sortedWorkspaces.value.length <= 1) {
-    workspace.title = 'Chat ' + generateRandomName()
-    workspace.input = ''
-    workspace.created_at = dayjs().format()
-    onReset()
-    return
-  }
-  config.value.workspaces = config.value.workspaces.filter(v => v.id !== workspace.id)
-  if (workspace.id === currentWorkspace.value.id) {
-    switchWorkspace(sortedWorkspaces.value[0])
-  }
-}
-
-let editWorkspaceDialog = ref(false)
-let editWorkspaceTitle = ref('')
-let editWorkspaceIndex = ref(0)
-
-function onEditWorkspace(workspace: Workspace) {
-  editWorkspaceTitle.value = workspace.title
-  editWorkspaceIndex.value = workspace.id
-  editWorkspaceDialog.value = true
-}
-
-function confirmEditWorkspace() {
-  if (editWorkspaceTitle.value === '') {
-    return
-  }
-  let workspace = sortedWorkspaces.value.find(v => v.id === editWorkspaceIndex.value)!
-  workspace.title = editWorkspaceTitle.value
-  editWorkspaceDialog.value = false
-}
-
-
-function addWorkspace() {
-  let nextID = sortedWorkspaces.value[0].id + 1
-  let workspace = <Workspace>{
-    id: nextID,
-    title: 'Chat ' + generateRandomName(),
-    created_at: dayjs().format(),
-    no_search: currentWorkspace.value.no_search,
-    backend: currentWorkspace.value.backend,
-    context: config.value.presets.find(v => v.name === currentWorkspace.value.preset)?.content ?? '',
-    conversation_style: currentWorkspace.value.conversation_style,
-    input: '',
-    locale: currentWorkspace.value.locale,
-    preset: currentWorkspace.value.preset,
-  }
-  config.value.workspaces.push(workspace)
-  switchWorkspace(workspace)
-}
-
-function switchWorkspace(workspace: Workspace) {
-  currentWorkspace.value = workspace
-  suggestedResponses.value = []
-}
-
 let chatContextTabIndex = ref(0)
+
+let generativeImageLoading = ref(false)
+let generativeImageError = ref('')
+
+function generateImage(req: GenerativeImage) {
+  generativeImageLoading.value = true
+  generativeImageError.value = ''
+  GenerateImage(req).then(res => {
+    if (!currentWorkspace.value.image_packs) {
+      currentWorkspace.value.image_packs = []
+    }
+    currentWorkspace.value.image_packs.push(res)
+  }).catch(err => {
+    generativeImageError.value = err.toString()
+  }).finally(() => {
+    generativeImageLoading.value = false
+  })
+}
+
+let workspaceNav = ref(null)
+
 </script>
 
 <template>
@@ -440,38 +330,10 @@ let chatContextTabIndex = ref(0)
       <user-status-button></user-status-button>
     </template>
     <template #default>
-      <v-navigation-drawer v-model="navDrawer" :permanent="true">
-        <div class="d-flex flex-column fill-height">
-          <v-list class="overflow-y-auto flex-grow-1">
-            <v-list-item v-for="workspace in sortedWorkspaces">
-              <conversation :title="workspace.title" :created-at="workspace.created_at"
-                            :active="workspace.id===currentWorkspace.id" :disabled="isAsking"
-                            @delete="onDeleteWorkspace(workspace)" @edit="onEditWorkspace(workspace)"
-                            @click="switchWorkspace(workspace)"></conversation>
-            </v-list-item>
-          </v-list>
-          <div class="d-flex ma-3">
-            <v-btn :disabled="isAsking" @click="addWorkspace" variant="text" class="flex-grow-1" color="primary"
-                   prepend-icon="mdi-plus">
-              Add
-            </v-btn>
-            <search-workspace-button @switch-workspace="switchWorkspace" :is-asking="isAsking"
-                                     :workspaces="sortedWorkspaces"></search-workspace-button>
-          </div>
-        </div>
-      </v-navigation-drawer>
-      <v-dialog max-width="500" v-model="editWorkspaceDialog">
-        <v-card>
-          <v-card-text>
-            <v-text-field color="primary" label="Workspace Title" v-model="editWorkspaceTitle"></v-text-field>
-          </v-card-text>
-          <v-card-actions>
-            <v-spacer></v-spacer>
-            <v-btn variant="text" color="primary" @click="editWorkspaceDialog=false">Cancel</v-btn>
-            <v-btn variant="text" color="primary" @click="confirmEditWorkspace">Confirm</v-btn>
-          </v-card-actions>
-        </v-card>
-      </v-dialog>
+      <workspace-nav v-if="!loading" :is-asking="isAsking" v-model="navDrawer"
+                     v-model:current-workspace="currentWorkspace"
+                     v-model:workspaces="config.workspaces" :presets="config.presets" @on-reset="onReset"
+                     @update:suggested-responses="arr => suggestedResponses=arr"></workspace-nav>
       <div class="d-flex flex-column fill-height" v-if="!loading">
         <div class="d-flex align-center top-action-bar mx-2">
           <p class="font-weight-bold">Chat Context:</p>
@@ -542,61 +404,13 @@ let chatContextTabIndex = ref(0)
         <div class="my-1 d-flex">
           <p class="font-weight-bold">Follow-up User Input:</p>
           <v-spacer></v-spacer>
-          <div style="position: relative">
-            <v-hover v-slot="{ isHovering, props }">
-              <v-hover v-slot="{isHovering:subHovering,props:subProps}">
-                <v-fade-transition>
-                  <v-card v-show="(isHovering || subHovering) && uploadedImage" v-bind="subProps"
-                          style="position: absolute;bottom: 24px;right: 32px;">
-                    <v-card-text>
-                      <img v-if="uploadedImage" style="max-width: 200px;max-height: 400px"
-                           :src="uploadedImage.base64_url" alt="img"/>
-                    </v-card-text>
-                    <v-card-actions>
-                      <v-spacer></v-spacer>
-                      <v-btn variant="text" color="primary" @click="uploadImage">
-                        <v-icon>mdi-file-replace</v-icon>
-                        Replace
-                      </v-btn>
-                      <v-btn variant="text" color="red" @click="uploadedImage=undefined">
-                        <v-icon>mdi-close</v-icon>
-                        Remove
-                      </v-btn>
-                    </v-card-actions>
-                  </v-card>
-                </v-fade-transition>
-              </v-hover>
-              <user-input-tool-button @click="uploadImage" :bindings="uploadedImage?props:undefined"
-                                      tooltip="Upload an image"
-                                      icon="mdi-file-image" :color="uploadedImage?'green':undefined"
-                                      :disabled="isAsking" :loading="uploadingImage"></user-input-tool-button>
-            </v-hover>
-          </div>
-          <user-input-tool-button @click="uploadDocument" tooltip="Upload a document (.pdf/.docx/.pptx)"
-                                  icon="mdi-file-document"
-                                  :loading="uploadingDocument"
-                                  :disabled="isAsking"></user-input-tool-button>
-          <user-input-tool-button tooltip="Fetch a webpage" icon="mdi-web" @click="webpageFetchDialog=true"
-                                  :disabled="isAsking" :loading="webpageFetching"></user-input-tool-button>
-          <v-dialog v-model="webpageFetchDialog" max-width="500" :persistent="true">
-            <v-card>
-              <v-card-title>Enter a URL to fetch</v-card-title>
-              <v-card-text>
-                <v-text-field :error-messages="webpageFetchError" label="URL" v-model="webpageFetchURL"
-                              color="primary" @keydown.enter="fetchWebpage"></v-text-field>
-              </v-card-text>
-              <v-card-actions>
-                <v-spacer></v-spacer>
-                <v-btn variant="text" color="primary" :disabled="webpageFetching"
-                       @click="webpageFetchURL='';webpageFetchDialog=false">
-                  Cancel
-                </v-btn>
-                <v-btn variant="text" color="primary" :loading="webpageFetching" @click="fetchWebpage">Fetch</v-btn>
-              </v-card-actions>
-            </v-card>
-          </v-dialog>
-          <user-input-tool-button tooltip="Revoke the latest user message" icon="mdi-undo" @click="handleRevoke"
-                                  :disabled="isAsking"></user-input-tool-button>
+          <upload-image-button :is-asking="isAsking" v-model="uploadedImage"></upload-image-button>
+          <upload-document-button :is-asking="isAsking"
+                                  @append-block-to-current-workspace="appendBlockToCurrentWorkspace"
+          ></upload-document-button>
+          <fetch-webpage-button :is-asking="isAsking"
+                                @append-block-to-current-workspace="appendBlockToCurrentWorkspace"></fetch-webpage-button>
+          <revoke-button :is-asking="isAsking" :current-workspace="currentWorkspace"></revoke-button>
           <v-menu>
             <template #activator="{props}">
               <v-btn color="primary" density="compact" variant="tonal" append-icon="mdi-menu-down"
